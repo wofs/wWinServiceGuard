@@ -7,7 +7,7 @@ Written in Lazarus-IDE.
 * https://github.com/wofs/wWinServices.git  
 
 ### Ini file has the following format:  
-[Settings]				; Program setting  
+[Settings]				; Program settings  
 PollingPeriod=1			; Service status polling period  
 StartServices=1			; Allow service management (start / stop)  
 LogMode=3				; Event logging level. 0-off, 1-Errors, 2-System, 3 - Debugging  
