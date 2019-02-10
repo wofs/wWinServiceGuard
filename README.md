@@ -1,5 +1,6 @@
 # wWinServiceGuard
-Allows you to control and start selected services, as well as restart them in case of a fall.
+Allows you to control and start selected services, as well as restart them in case of a fall.  
+Written in Lazarus-IDE.
 
 ### The project uses:
 * http://www.lazarus-ide.org/  
