@@ -6,12 +6,19 @@ object Daemon1: TDaemon1
   Height = 150
   HorizontalOffset = 306
   VerticalOffset = 129
-  Width = 150
+  Width = 207
   PPI = 96
   object TimerPool: TSimpleTimer
     Interval = 0
     Enabled = False
     left = 24
+    top = 21
+  end
+  object TimerRestartServices: TSimpleTimer
+    Interval = 0
+    Enabled = False
+    OnTimer = TimerRestartServicesTimer
+    left = 112
     top = 21
   end
 end

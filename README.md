@@ -8,7 +8,7 @@ Written in Lazarus-IDE.
 
 ### Ini file has the following format:  
 [Settings]				; Program settings  
-PollingPeriod=1			; Service status polling period  
+PollingPeriod=1			; Service status polling period (in seconds)  
 StartServices=1			; Allow service management (start / stop)  
 LogMode=3				; Event logging level. 0-off, 1-Errors, 2-System, 3 - Debugging  
   
@@ -18,3 +18,7 @@ s1=Mcx2Svc
   
 [NotStopServices]		; Services that are forbidden to stop.  
 s0=W32Time  
+  
+[RestartableServices]	; Services that need to be restarted periodically  
+RestartPeriod=30		; Service restart period (in seconds)  
+s0=Mcx2Svc  

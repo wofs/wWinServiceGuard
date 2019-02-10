@@ -16,12 +16,13 @@ uses
 type
   TMsgOutputChannel = (mocFile);
   TGuardStatus = (gsInit, gsReady, gsWite, gsSleep, gsError);
-  TControlMode = (cmRunAll);
+  TControlMode = (cmRunAll, cmRestartSome, cmStart, cmStop, cmGetStatuses);
 
   TLogMode = (lmOff, lmError, lmSystem, lmDebug, lmDevelop);
   TLogType = (ltError, ltSystem, ltDebug, ltDevelop);
 
   TService = record
+    Index: integer;
     Name: string;
     Status: word;
     StatusText: string;
@@ -33,6 +34,7 @@ type
 
   TSettings = record
     PollingPeriod: integer;
+    RestartPeriod: integer;
     StartServices: boolean;
     MsgOutputChannel: TMsgOutputChannel;
   end;
@@ -41,6 +43,7 @@ type
 
   TServiceGuard = class
     private
+      fonRestartTimerOn: TNotifyEvent;
       fSettings: TSettings;
       fLogMode: array of TLogType;
 
@@ -49,6 +52,7 @@ type
       fLogFile: string;
       fCurrentPath: string;
       fStatus: TGuardStatus;
+      fWaitingForRestart: boolean;
 
       fWinServices: TWinServices;
 
@@ -57,8 +61,10 @@ type
         uLogDir = 'log';
 
       function CheckLogType(aLogType: TLogType): boolean;
+      function GetRestartableServices: TServices;
       function HaveServicesStopped: boolean;
       function LogTypeAsString(aLogType: TLogType): string;
+      procedure ServiceControlRestartSome;
       procedure ServiceControlRunAll;
       procedure ServiceControl(aMode: TControlMode);
       procedure SetLogMode(aLogMode: TLogMode);
@@ -68,10 +74,13 @@ type
       procedure LoadDefaultSettings;
       procedure ReadIniFile;
       procedure ReadLogFileName;
-      function CreateServiceItem(aName: string): TService;
+      function CreateServiceItem(aName: string; aIndex: integer): TService;
       procedure SetService(aName: string; aValue: TService);
       procedure SetStatus(aValue: TGuardStatus);
+      procedure ServiceControlStartServices;
       function StatusAsText(aStatus: TGuardStatus): string;
+      procedure ServiceControlStopServices;
+
       function UpdateServiceStatus(aIndex: integer): TService;
 
       procedure WriteLogInFile(aText: string; const WriteDate: boolean);
@@ -79,9 +88,9 @@ type
 
     protected
       procedure ReadSettings;
-      procedure GettingServiceStatuses;
-      procedure StartServices;
-      procedure StopServices(const aTargetService:string = '');
+      procedure DoGettingServiceStatuses;
+      procedure DoStartServices(var aServices: TServices);
+      procedure DoStopServices(var aServices: TServices);
 
     public
       constructor Create;
@@ -96,11 +105,15 @@ type
       procedure Run;
       procedure Init;
       procedure Finish;
+      procedure RestartSomeServices;
+      procedure WaitReady;
 
       property Services: TServices read fServices write fServices;
       property Service[aName:string]: TService read GetService write SetService;
       property Settings: TSettings read fSettings;
       property Status: TGuardStatus read fStatus write SetStatus;
+
+      property onRestartTimerOn: TNotifyEvent read fonRestartTimerOn write fonRestartTimerOn;
   end;
 
 implementation
@@ -122,7 +135,6 @@ const
 var
   IniFile: TIniFile;
   i: Integer;
-  aRestartPeriod: integer;
   aService: TService;
   aName: String;
 begin
@@ -144,14 +156,14 @@ begin
       begin
         aName:= IniFile.ReadString(_CONTROLLED_SERVICES,Format(_S,[i]),_CONTROLLED_SERVICES);
         if aName <> _CONTROLLED_SERVICES then
-          Services.PushBack(CreateServiceItem(aName));
+          Services.PushBack(CreateServiceItem(aName, i));
         inc(i);
       end;
 
       if Services.Size <> 0 then
         begin
           //_RESTARTABLE_SERVICES
-          aRestartPeriod:= IniFile.ReadInteger(_RESTARTABLE_SERVICES,_RESTART_PERIOD,0);
+          RestartPeriod:= IniFile.ReadInteger(_RESTARTABLE_SERVICES,_RESTART_PERIOD,0);
           i:= 0;
           aName:= EmptyStr;
 
@@ -160,7 +172,7 @@ begin
             aName:= IniFile.ReadString(_RESTARTABLE_SERVICES,Format(_S,[i]),_RESTARTABLE_SERVICES);
 
             aService:= Service[aName];
-            aService.RestartPeriod:= aRestartPeriod;
+            aService.RestartPeriod:= RestartPeriod;
             Service[aName]:= aService;
             inc(i);
           end;
@@ -180,9 +192,6 @@ begin
           end;
 
         end;
-
-
-
     end;
   finally
     FreeAndNil(IniFile);
@@ -270,8 +279,9 @@ begin
  fLogFile:= aLogDir+ DirectorySeparator +FormatDateTime('ddmmyyyy',Now)+'.log';
 end;
 
-function TServiceGuard.CreateServiceItem(aName: string): TService;
+function TServiceGuard.CreateServiceItem(aName: string; aIndex: integer): TService;
 begin
+  Result.Index:= aIndex;
   Result.Name:= aName;
   Result.Status:= 0;
   Result.StatusText:= '';
@@ -321,13 +331,11 @@ begin
 
 end;
 
-procedure TServiceGuard.GettingServiceStatuses;
+procedure TServiceGuard.DoGettingServiceStatuses;
 var
   i: Integer;
   aService: TService;
 begin
-  Status:= gsWite;
-
   WriteLog('GettingServiceStatuses =>', ltDevelop, true);
   WriteLog('Getting service statuses...', ltDebug);
 
@@ -340,8 +348,6 @@ begin
 
   WriteLog('Getting service statuses... [completed]', ltDebug);
   WriteLog('GettingServiceStatuses |', ltDevelop, true);
-
-  Status:= gsReady;
 end;
 
 function TServiceGuard.UpdateServiceStatus(aIndex: integer):TService;
@@ -356,10 +362,48 @@ end;
 procedure TServiceGuard.ServiceControlRunAll;
 begin
   Sleep(1000);
-  StopServices;
+  ServiceControlStopServices;
   Sleep(1000);
-  StartServices;
+  ServiceControlStartServices;
   Sleep(1000);
+end;
+
+function TServiceGuard.GetRestartableServices:TServices;
+var
+  i: Integer;
+begin
+ Result:= TServices.Create;
+
+ for i:=0 to Services.Size-1 do
+   begin
+     if Services[i].RestartPeriod>0 then
+       Result.PushBack(Services[i]);
+   end;
+end;
+
+procedure TServiceGuard.ServiceControlRestartSome;
+var
+  aServices: TServices;
+begin
+  WriteLog('Restarts the selected services...', ltSystem);
+
+  aServices:= GetRestartableServices;
+  try
+    DoStopServices(aServices);
+  finally
+    aServices.Free;
+  end;
+
+  Sleep(1000);
+
+  aServices:= GetRestartableServices;
+  try
+    DoStartServices(aServices);
+  finally
+    aServices.Free;
+  end;
+
+  WriteLog('Restarts the selected services... [completed]', ltSystem);
 end;
 
 function TServiceGuard.HaveServicesStopped:boolean;
@@ -383,33 +427,60 @@ begin
    WriteLogFmt(' "%s": [%s]',[Services[i].Name, Services[i].StatusText], ltSystem);
 end;
 
+procedure TServiceGuard.WaitReady;
+begin
+  while not (Status = gsReady) do
+    Sleep(200);
+end;
+
 procedure TServiceGuard.ServiceControl(aMode: TControlMode);
 begin
-  case aMode of
-    cmRunAll:
-      if HaveServicesStopped then
-      begin
-        WriteLog('Stopped services detected!', ltSystem);
-        WriteServiceStatesToLog;
-        WriteLog('All monitored services will be restarted!', ltSystem);
-        ServiceControlRunAll;
-      end;
+  WaitReady;
+
+  Status:= gsWite;
+
+  try
+    case aMode of
+      cmRunAll:
+        if HaveServicesStopped then
+        begin
+          WriteLog('Stopped services detected!', ltSystem);
+          WriteServiceStatesToLog;
+          WriteLog('All monitored services will be restarted!', ltSystem);
+          ServiceControlRunAll;
+        end;
+      cmRestartSome:
+        begin
+          fWaitingForRestart:= false;
+          ServiceControlRestartSome;
+          if Assigned(fonRestartTimerOn) then fonRestartTimerOn(Self);
+        end;
+      cmStart           : ServiceControlStartServices;
+      cmStop            : ServiceControlStopServices;
+      cmGetStatuses     : DoGettingServiceStatuses;
+    end;
+
+  finally
+    Status:= gsReady;
   end;
 end;
 
-procedure TServiceGuard.StartServices;
+procedure TServiceGuard.ServiceControlStartServices;
+begin
+  DoStartServices(fServices);
+end;
+
+procedure TServiceGuard.DoStartServices(var aServices: TServices);
 var
   i: Integer;
   aService: TService;
 begin
-   Status:= gsWite;
-
    WriteLog('StartServices =>', ltDevelop, true);
    WriteLog('Start services...', ltSystem);
 
-   for i:=0 to Services.Size-1 do
+   for i:=0 to aServices.Size-1 do
      begin
-       aService:= Services[i];
+       aService:= aServices[i];
 
        if aService.Status = SC_Stopped then
          begin
@@ -418,7 +489,7 @@ begin
            if not fWinServices.ServiceStart('',aService.Name) then
                WriteLogFmt('"%s": %s ',[aService.Name, 'startup error'], ltSystem);
 
-             aService:= UpdateServiceStatus(i);
+             aService:= UpdateServiceStatus(aService.Index);
 
              WriteLogFmt(' "%s": [%s]',[aService.Name, aService.StatusText], ltSystem);
          end;
@@ -426,23 +497,24 @@ begin
 
    WriteLog('Start services... [completed]', ltSystem);
    WriteLog('StartServices |', ltDevelop, true);
-
-   Status:= gsReady;
 end;
 
-procedure TServiceGuard.StopServices(const aTargetService: string);
+procedure TServiceGuard.ServiceControlStopServices;
+begin
+  DoStopServices(fServices);
+end;
+
+procedure TServiceGuard.DoStopServices(var aServices: TServices);
 var
   i: Integer;
   aService: TService;
 begin
-   Status:= gsWite;
-
    WriteLog('StopServices =>', ltDevelop, true);
    WriteLog('Stopping services...', ltSystem);
 
-   for i:=Services.Size-1 downto 0 do
+   for i:=aServices.Size-1 downto 0 do
      begin
-       aService:= Services[i];
+       aService:= aServices[i];
 
        if aService.NotStop then
           WriteLogFmt(' "%s": [%s] %s ',[aService.Name, aService.StatusText, 'was skipped. This service cannot be stopped.'], ltSystem);
@@ -454,18 +526,13 @@ begin
            if not fWinServices.ServiceStop('',aService.Name) then
                WriteLogFmt('"%s": %s ',[aService.Name,'stopping error'], ltSystem);
 
-             aService:= UpdateServiceStatus(i);
+             aService:= UpdateServiceStatus(aService.Index);
              WriteLogFmt(' "%s": [%s]',[aService.Name, aService.StatusText], ltSystem);
          end;
-
-       if aService.Name = aTargetService then //If the name of the current service coincides with the target, then terminate the cycle
-         break;
      end;
 
    WriteLog('Stopping services... [completed]', ltSystem);
    WriteLog('StopServices |', ltDevelop, true);
-
-   Status:= gsReady;
 end;
 
 constructor TServiceGuard.Create;
@@ -497,7 +564,10 @@ procedure TServiceGuard.Run;
 begin
   WriteLog('Run =>', ltDevelop, true);
 
-  GettingServiceStatuses;
+  ServiceControl(cmGetStatuses);
+
+  if fWaitingForRestart then
+    ServiceControl(cmRestartSome);
 
   if Settings.StartServices then
     ServiceControl(cmRunAll);
@@ -509,15 +579,20 @@ procedure TServiceGuard.Init;
 begin
  if Settings.StartServices then
    begin
-     GettingServiceStatuses;
-     StartServices;
+     ServiceControl(cmGetStatuses);
+     ServiceControl(cmStart);
    end;
 end;
 
 procedure TServiceGuard.Finish;
 begin
  if Settings.StartServices then
-    StopServices;
+    ServiceControl(cmStop);
+end;
+
+procedure TServiceGuard.RestartSomeServices;
+begin
+  fWaitingForRestart:= true;
 end;
 
 procedure TServiceGuard.WriteLogInFile(aText: string; const WriteDate: boolean);
