@@ -21,6 +21,8 @@ type
   TLogMode = (lmOff, lmError, lmSystem, lmDebug, lmDevelop);
   TLogType = (ltError, ltSystem, ltDebug, ltDevelop);
 
+  TRunMode = (rmMonitoring, rmRestart);
+
   TService = record
     Index: integer;
     Name: string;
@@ -40,10 +42,16 @@ type
   end;
 
   { TServiceGuard }
+  TQueueSystem = record
+    RunMode: TRunMode;
+  end;
+
+  TQueue = specialize TVector<TQueueSystem>;
 
   TServiceGuard = class
     private
-      fonRestartTimerOn: TNotifyEvent;
+      fQueue: TQueue;
+
       fSettings: TSettings;
       fLogMode: array of TLogType;
 
@@ -52,7 +60,6 @@ type
       fLogFile: string;
       fCurrentPath: string;
       fStatus: TGuardStatus;
-      fWaitingForRestart: boolean;
 
       fWinServices: TWinServices;
 
@@ -61,9 +68,15 @@ type
         uLogDir = 'log';
 
       function CheckLogType(aLogType: TLogType): boolean;
+      function GetQueue: TRunMode;
+      function GetQueueIsEmpty: boolean;
       function GetRestartableServices: TServices;
+      function GetRunMode: TRunMode;
       function HaveServicesStopped: boolean;
       function LogTypeAsString(aLogType: TLogType): string;
+      function QueueCreateItem(aRunMode: TRunMode): TQueueSystem;
+      function QueuePop: TRunMode;
+      procedure QueuePush(aRunMode: TRunMode);
       procedure ServiceControlRestartSome;
       procedure ServiceControlRunAll;
       procedure ServiceControl(aMode: TControlMode);
@@ -75,6 +88,7 @@ type
       procedure ReadIniFile;
       procedure ReadLogFileName;
       function CreateServiceItem(aName: string; aIndex: integer): TService;
+
       procedure SetService(aName: string; aValue: TService);
       procedure SetStatus(aValue: TGuardStatus);
       procedure ServiceControlStartServices;
@@ -102,18 +116,18 @@ type
       procedure WriteLogFmt(aText: string; const Args: array of const; const aLogType: TLogType;
         const WriteTime: boolean = true);
 
-      procedure Run;
+      function Run: TRunMode;
       procedure Init;
       procedure Finish;
-      procedure RestartSomeServices;
       procedure WaitReady;
+      procedure SetQueue(aValue: TRunMode);
 
       property Services: TServices read fServices write fServices;
       property Service[aName:string]: TService read GetService write SetService;
       property Settings: TSettings read fSettings;
       property Status: TGuardStatus read fStatus write SetStatus;
-
-      property onRestartTimerOn: TNotifyEvent read fonRestartTimerOn write fonRestartTimerOn;
+      //property Queue: TRunMode read GetQueue write SetQueue;
+      property QueueIsEmpty: boolean read GetQueueIsEmpty;
   end;
 
 implementation
@@ -289,6 +303,11 @@ begin
   Result.NotStop:= false;
 end;
 
+procedure TServiceGuard.SetQueue(aValue: TRunMode);
+begin
+  QueuePush(aValue);
+end;
+
 procedure TServiceGuard.SetService(aName: string; aValue: TService);
 var
   i: Integer;
@@ -342,7 +361,6 @@ begin
   for i:=0 to Services.Size-1 do
     begin
       aService:= UpdateServiceStatus(i);
-
       WriteLogFmt(' "%s" [%s]',[aService.Name, aService.StatusText], ltDebug);
     end;
 
@@ -379,6 +397,11 @@ begin
      if Services[i].RestartPeriod>0 then
        Result.PushBack(Services[i]);
    end;
+end;
+
+function TServiceGuard.GetRunMode: TRunMode;
+begin
+  Result:= fQueue.Front.RunMode;
 end;
 
 procedure TServiceGuard.ServiceControlRestartSome;
@@ -449,15 +472,19 @@ begin
           WriteLog('All monitored services will be restarted!', ltSystem);
           ServiceControlRunAll;
         end;
-      cmRestartSome:
-        begin
-          fWaitingForRestart:= false;
-          ServiceControlRestartSome;
-          if Assigned(fonRestartTimerOn) then fonRestartTimerOn(Self);
-        end;
+      cmRestartSome     : ServiceControlRestartSome;
       cmStart           : ServiceControlStartServices;
       cmStop            : ServiceControlStopServices;
-      cmGetStatuses     : DoGettingServiceStatuses;
+      cmGetStatuses     :
+        begin
+          DoGettingServiceStatuses;
+
+          if not Settings.StartServices and HaveServicesStopped then
+             begin
+               WriteLog('Stopped services detected!', ltSystem);
+               WriteServiceStatesToLog;
+             end;
+        end;
     end;
 
   finally
@@ -538,7 +565,7 @@ end;
 constructor TServiceGuard.Create;
 begin
   Status:= gsInit;
-
+  fQueue:= TQueue.Create;
   Services:= TServices.Create;
   ReadSettings;
   fWinServices:= TWinServices.Create;
@@ -548,9 +575,26 @@ end;
 
 destructor TServiceGuard.Destroy;
 begin
+  FreeAndNil(fQueue);
   FreeAndNil(fServices);
   FreeAndNil(fWinServices);
   inherited Destroy;
+end;
+
+function TServiceGuard.QueueCreateItem(aRunMode: TRunMode):TQueueSystem;
+begin
+  Result.RunMode:= aRunMode;
+end;
+
+procedure TServiceGuard.QueuePush(aRunMode: TRunMode);
+begin
+  fQueue.PushBack(QueueCreateItem(aRunMode));
+end;
+
+function TServiceGuard.QueuePop: TRunMode;
+begin
+ Result:= fQueue.Front.RunMode;
+ fQueue.Erase(0);
 end;
 
 procedure TServiceGuard.WriteLogFmt(aText: string; const Args: array of const;
@@ -560,17 +604,18 @@ begin
 end;
 
 
-procedure TServiceGuard.Run;
+function TServiceGuard.Run: TRunMode;
 begin
   WriteLog('Run =>', ltDevelop, true);
 
+  Result:= GetRunMode;
+
   ServiceControl(cmGetStatuses);
 
-  if fWaitingForRestart then
-    ServiceControl(cmRestartSome);
-
-  if Settings.StartServices then
-    ServiceControl(cmRunAll);
+  case GetQueue of
+    rmMonitoring: if Settings.StartServices then ServiceControl(cmRunAll);
+    rmRestart: ServiceControl(cmRestartSome);
+  end;
 
   WriteLog('Run |', ltDevelop, true);
 end;
@@ -588,11 +633,6 @@ procedure TServiceGuard.Finish;
 begin
  if Settings.StartServices then
     ServiceControl(cmStop);
-end;
-
-procedure TServiceGuard.RestartSomeServices;
-begin
-  fWaitingForRestart:= true;
 end;
 
 procedure TServiceGuard.WriteLogInFile(aText: string; const WriteDate: boolean);
@@ -678,6 +718,16 @@ begin
           Result:= true;
           Exit;
         end;
+end;
+
+function TServiceGuard.GetQueue: TRunMode;
+begin
+  Result:= QueuePop;
+end;
+
+function TServiceGuard.GetQueueIsEmpty: boolean;
+begin
+  Result:= fQueue.Size=0;
 end;
 
 procedure TServiceGuard.WriteLog(aText: string; const aLogType: TLogType; const WriteTime: boolean);
