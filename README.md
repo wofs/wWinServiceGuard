@@ -15,5 +15,5 @@ LogMode=3				; Event logging level. 0-off, 1-Errors, 2-System, 3 - Debugging
 s0=W32Time  
 s1=Mcx2Svc  
   
-[NotStopServices]		; Services that are forbidden to stop.  	
+[NotStopServices]		; Services that are forbidden to stop.  
 s0=W32Time  
