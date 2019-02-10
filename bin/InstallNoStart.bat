@@ -1,0 +1,3 @@
+@echo Installing...
+start %~dp0ServiceGuard.exe -i
+@pause

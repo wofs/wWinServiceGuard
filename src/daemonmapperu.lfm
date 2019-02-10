@@ -1,0 +1,19 @@
+object DaemonMapper1: TDaemonMapper1
+  DaemonDefs = <  
+    item
+      DaemonClassName = 'TDaemon1'
+      Name = 'Service.Guard'
+      Description = 'Allows you to control and start selected services, as well as restart them in case of a fall.'
+      DisplayName = 'Service.Guard'
+      Options = [doAllowStop, doAllowPause]
+      WinBindings.Dependencies = <>
+      WinBindings.StartType = stAuto
+      WinBindings.WaitHint = 5000
+      WinBindings.IDTag = 0
+      WinBindings.ServiceType = stWin32
+      WinBindings.ErrorSeverity = esIgnore
+      LogStatusReport = False
+    end>
+  left = 350
+  top = 118
+end

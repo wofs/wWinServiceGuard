@@ -1,0 +1,17 @@
+object Daemon1: TDaemon1
+  OnCreate = DataModuleCreate
+  OldCreateOrder = False
+  OnStart = DataModuleStart
+  OnStop = DataModuleStop
+  Height = 150
+  HorizontalOffset = 306
+  VerticalOffset = 129
+  Width = 150
+  PPI = 96
+  object TimerPool: TSimpleTimer
+    Interval = 0
+    Enabled = False
+    left = 24
+    top = 21
+  end
+end

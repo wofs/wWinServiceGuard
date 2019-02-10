@@ -1,0 +1,6 @@
+@echo Stop the service...
+net stop Service.Guard
+@echo Removing...
+start %~dp0ServiceGuard.exe -u
+@echo Completed
+@pause
