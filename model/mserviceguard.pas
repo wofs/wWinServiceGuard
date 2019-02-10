@@ -25,6 +25,7 @@ type
     Name: string;
     Status: word;
     StatusText: string;
+    NotStop: boolean;
     RestartPeriod: integer;
   end;
 
@@ -80,7 +81,7 @@ type
       procedure ReadSettings;
       procedure GettingServiceStatuses;
       procedure StartServices;
-      procedure StopServices;
+      procedure StopServices(const aTargetService:string = '');
 
     public
       constructor Create;
@@ -113,6 +114,7 @@ const
   _START_SERVICES          = 'StartServices';
   _MSG_OUTPUT_CHANNEL      = 'MsgOutputChannel';
   _CONTROLLED_SERVICES     = 'ControlledServices';
+  _NOT_STOP_SERVICES       = 'NotStopServices';
   _S                       = 's%d';
   _RESTARTABLE_SERVICES    = 'RestartableServices';
   _RESTART_PERIOD          = 'RestartPeriod';
@@ -148,6 +150,7 @@ begin
 
       if Services.Size <> 0 then
         begin
+          //_RESTARTABLE_SERVICES
           aRestartPeriod:= IniFile.ReadInteger(_RESTARTABLE_SERVICES,_RESTART_PERIOD,0);
           i:= 0;
           aName:= EmptyStr;
@@ -161,6 +164,21 @@ begin
             Service[aName]:= aService;
             inc(i);
           end;
+
+          //_NOT_STOP_SERVICES
+          i:= 0;
+          aName:= EmptyStr;
+
+          while aName <> _NOT_STOP_SERVICES do
+          begin
+            aName:= IniFile.ReadString(_NOT_STOP_SERVICES,Format(_S,[i]),_NOT_STOP_SERVICES);
+
+            aService:= Service[aName];
+            aService.NotStop:= true;
+            Service[aName]:= aService;
+            inc(i);
+          end;
+
         end;
 
 
@@ -204,6 +222,14 @@ begin
        begin
          if Services[i].RestartPeriod > 0 then
            WriteLogFmt(#9+'%s [%d s]',[Services[i].Name, Services[i].RestartPeriod], ltDebug, false);
+       end;
+
+     WriteLog('Not stop services:', ltDebug, false);
+
+     for i:=0 to Services.Size-1 do
+       begin
+         if Services[i].NotStop then
+           WriteLogFmt(#9+'%s',[Services[i].Name], ltDebug, false);
        end;
    end;
 end;
@@ -250,6 +276,7 @@ begin
   Result.Status:= 0;
   Result.StatusText:= '';
   Result.RestartPeriod:= 0;
+  Result.NotStop:= false;
 end;
 
 procedure TServiceGuard.SetService(aName: string; aValue: TService);
@@ -403,7 +430,7 @@ begin
    Status:= gsReady;
 end;
 
-procedure TServiceGuard.StopServices;
+procedure TServiceGuard.StopServices(const aTargetService: string);
 var
   i: Integer;
   aService: TService;
@@ -417,7 +444,10 @@ begin
      begin
        aService:= Services[i];
 
-       if aService.Status = SC_Running then
+       if aService.NotStop then
+          WriteLogFmt(' "%s": [%s] %s ',[aService.Name, aService.StatusText, 'was skipped. This service cannot be stopped.'], ltSystem);
+
+       if (aService.Status = SC_Running) and not aService.NotStop then
          begin
            WriteLogFmt(' "%s": [%s] %s ',[aService.Name, aService.StatusText, 'stopping service... '], ltSystem);
 
@@ -427,6 +457,9 @@ begin
              aService:= UpdateServiceStatus(i);
              WriteLogFmt(' "%s": [%s]',[aService.Name, aService.StatusText], ltSystem);
          end;
+
+       if aService.Name = aTargetService then //If the name of the current service coincides with the target, then terminate the cycle
+         break;
      end;
 
    WriteLog('Stopping services... [completed]', ltSystem);
