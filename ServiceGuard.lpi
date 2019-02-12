@@ -17,7 +17,7 @@
       <UseVersionInfo Value="True"/>
       <AutoIncrementBuild Value="True"/>
       <MinorVersionNr Value="1"/>
-      <BuildNr Value="4"/>
+      <BuildNr Value="5"/>
       <Language Value="0419"/>
       <StringTable LegalCopyright="wofssirius(c)2018" ProductVersion="0.0.0.0"/>
     </VersionInfo>

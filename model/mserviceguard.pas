@@ -15,13 +15,13 @@ uses
 
 type
   TMsgOutputChannel = (mocFile);
-  TGuardStatus = (gsInit, gsReady, gsWite, gsSleep, gsError);
+  TGuardStatus = (gsInit, gsReady, gsWite, gsSleep, gsError, gsFinish);
   TControlMode = (cmRunAll, cmRestartSome, cmStart, cmStop, cmGetStatuses);
 
   TLogMode = (lmOff, lmError, lmSystem, lmDebug, lmDevelop);
   TLogType = (ltError, ltSystem, ltDebug, ltDevelop);
 
-  TRunMode = (rmMonitoring, rmRestart);
+  TRunMode = (rmMonitoring, rmRestart, rmInit, rmFinish);
 
   TService = record
     Index: integer;
@@ -77,9 +77,16 @@ type
       function QueueCreateItem(aRunMode: TRunMode): TQueueSystem;
       function QueuePop: TRunMode;
       procedure QueuePush(aRunMode: TRunMode);
+      procedure ServiceControlGetStatuses;
       procedure ServiceControlRestartSome;
       procedure ServiceControlRunAll;
+      procedure DoInit;
+      procedure DoFinish;
+      procedure ServiceControlStartServices;
+      procedure ServiceControlStopServices;
       procedure ServiceControl(aMode: TControlMode);
+
+      procedure WaitReady;
       procedure SetLogMode(aLogMode: TLogMode);
 
       function GetService(aName: string): TService;
@@ -91,9 +98,8 @@ type
 
       procedure SetService(aName: string; aValue: TService);
       procedure SetStatus(aValue: TGuardStatus);
-      procedure ServiceControlStartServices;
+
       function StatusAsText(aStatus: TGuardStatus): string;
-      procedure ServiceControlStopServices;
 
       function UpdateServiceStatus(aIndex: integer): TService;
 
@@ -117,9 +123,6 @@ type
         const WriteTime: boolean = true);
 
       function Run: TRunMode;
-      procedure Init;
-      procedure Finish;
-      procedure WaitReady;
       procedure SetQueue(aValue: TRunMode);
 
       property Services: TServices read fServices write fServices;
@@ -475,21 +478,23 @@ begin
       cmRestartSome     : ServiceControlRestartSome;
       cmStart           : ServiceControlStartServices;
       cmStop            : ServiceControlStopServices;
-      cmGetStatuses     :
-        begin
-          DoGettingServiceStatuses;
-
-          if not Settings.StartServices and HaveServicesStopped then
-             begin
-               WriteLog('Stopped services detected!', ltSystem);
-               WriteServiceStatesToLog;
-             end;
-        end;
+      cmGetStatuses     : ServiceControlGetStatuses;
     end;
 
   finally
     Status:= gsReady;
   end;
+end;
+
+procedure TServiceGuard.ServiceControlGetStatuses;
+begin
+ DoGettingServiceStatuses;
+
+ if not Settings.StartServices and HaveServicesStopped then
+    begin
+      WriteLog('Stopped services detected!', ltSystem);
+      WriteServiceStatesToLog;
+    end;
 end;
 
 procedure TServiceGuard.ServiceControlStartServices;
@@ -615,24 +620,33 @@ begin
   case GetQueue of
     rmMonitoring: if Settings.StartServices then ServiceControl(cmRunAll);
     rmRestart: ServiceControl(cmRestartSome);
+    rmInit: DoInit;
+    rmFinish: DoFinish;
   end;
 
   WriteLog('Run |', ltDevelop, true);
 end;
 
-procedure TServiceGuard.Init;
+procedure TServiceGuard.DoInit;
 begin
  if Settings.StartServices then
    begin
-     ServiceControl(cmGetStatuses);
-     ServiceControl(cmStart);
+     Status:= gsWite;
+     ServiceControlGetStatuses;
+     ServiceControlStartServices;
+     Status:= gsReady;
    end;
 end;
 
-procedure TServiceGuard.Finish;
+procedure TServiceGuard.DoFinish;
 begin
  if Settings.StartServices then
-    ServiceControl(cmStop);
+   begin
+     Status:= gsWite;
+     ServiceControlGetStatuses;
+     ServiceControlStopServices;
+     Status:= gsReady;
+   end;
 end;
 
 procedure TServiceGuard.WriteLogInFile(aText: string; const WriteDate: boolean);

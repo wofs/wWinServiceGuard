@@ -95,17 +95,9 @@ begin
   TimerPool.Interval:= fServiceGuard.Settings.PollingPeriod*1000;
   TimerSystem.Interval:= 100;
 
-  fServiceGuard.Init;
+  fServiceGuard.SetQueue(rmInit);
 
   TimerSystem.Enabled:= true;
-
-  if fServiceGuard.Settings.RestartPeriod>0 then
-  begin
-    TimerRestartServices.Interval:= fServiceGuard.Settings.RestartPeriod*1000;
-    TimerRestartServices.Enabled:= true;
-  end;
-
-  TimerPool.Enabled:= true;
 end;
 
 procedure TDaemon1.DataModuleCreate(Sender: TObject);
@@ -117,15 +109,12 @@ end;
 
 procedure TDaemon1.DataModuleStop(Sender: TCustomDaemon; var OK: Boolean);
 begin
-  TimerSystem.Enabled:= false;
   TimerPool.Enabled:= false;
   TimerRestartServices.Enabled:= false;
-  fDaemonThread.Terminate;
+  fServiceGuard.SetQueue(rmFinish);
 
-  fServiceGuard.Finish;
-
-  fServiceGuard.WriteLog('['+ApplicationName+'] was stopped.', ltSystem);
-  FreeAndNil(fServiceGuard);
+  while Assigned(fServiceGuard) do
+     sleep(500);
 end;
 
 procedure TDaemon1.TimerPoolTimer(const Sender: TObject);
@@ -161,9 +150,27 @@ begin
   case aRunMode of
     rmMonitoring: TimerPool.Enabled:= true;
     rmRestart: TimerRestartServices.Enabled:= true;
+    rmInit:
+      begin
+        if fServiceGuard.Settings.RestartPeriod>0 then
+        begin
+          TimerRestartServices.Interval:= fServiceGuard.Settings.RestartPeriod*1000;
+          TimerRestartServices.Enabled:= true;
+        end;
+
+        TimerPool.Enabled:= true;
+      end;
+    rmFinish:
+      begin
+        TimerSystem.Enabled:= false;
+        fDaemonThread.Terminate;
+        fServiceGuard.WriteLog('['+ApplicationName+'] was stopped.', ltSystem);
+        FreeAndNil(fServiceGuard);
+      end;
   end;
 
-  TDaemonThread(Sender).Suspended:= true;
+  if not (aRunMode = rmFinish) then
+    TDaemonThread(Sender).Suspended:= true;
 
   fServiceGuard.WriteLog('onEndThread |', ltDevelop, true);
 end;
